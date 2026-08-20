@@ -1,0 +1,105 @@
+# Visual-diversity pipeline configuration.
+#
+# Every threshold and model choice the pipeline uses lives here; no stage reads a
+# magic number from code. Anything omitted falls back to the default declared on
+# the matching pydantic model in src/visual_diversity/config.py.
+
+output_dir: ./results
+# Intermediate artefacts (frames, embeddings). Kept out of output_dir so wiping
+# results does not force a re-extract.
+cache_dir: ./.vd_cache
+log_level: INFO
+# Fixes the sampling done in stage 12 so a re-run reviews the same pairs.
+random_seed: 17
+
+frames:
+  # Frames per clip, sampled at evenly spaced relative positions. At count=1
+  # the single sample is taken at the midpoint -- 50% of duration.
+  count: 1
+  # Duration-bucketed overrides. First bucket whose max_seconds is >= the clip
+  # duration wins; clips longer than every bucket use `count`. Left empty so
+  # `count` applies to every clip regardless of length; re-enable to sample
+  # short and long clips differently, e.g.
+  #   - {max_seconds: 5.0, count: 3}
+  #   - {max_seconds: 60.0, count: 5}
+  #   - {max_seconds: .inf, count: 7}
+  duration_buckets: []
+  resize: [224, 224]
+  # JPEG quality for cached frames (2 = best, 31 = worst; ffmpeg -q:v scale).
+  jpeg_quality: 3
+  workers: 8
+  # Per-clip ffmpeg timeout. A hung decode is skipped, not fatal.
+  timeout_seconds: 120
+
+embeddings:
+  # Which embedder feeds pooling -> search -> scoring.
+  #   primary   - `backend`/`model_name` below drive the score.
+  #   secondary - the CLIP block drives the score and the primary is never
+  #               loaded (no DINOv2 weights fetched).
+  driver: secondary
+
+  # dinov2 | clip | stub -- the primary. Ignored while driver is `secondary`.
+  #   dinov2 - facebook/dinov2-base CLS token (768-dim). Requires [embed].
+  #   clip   - openai/clip-vit-large-patch14 image tower. Requires [embed].
+  #   stub   - deterministic content hash. No deps; for tests and dry runs.
+  backend: dinov2
+  model_name: facebook/dinov2-base
+  batch_size: 32
+  # auto | cuda | cpu
+  device: auto
+  # The CLIP pass. Currently the driver, so this is what scores the delivery.
+  secondary_clip:
+    enabled: true
+    model_name: openai/clip-vit-large-patch14
+
+pooling:
+  # mean    - mean-pool frame vectors, then L2-normalise.
+  # none    - pooling bypassed: use the clip's single frame vector. Correct
+  #           only at frames.count=1, which is the current setting. The vector
+  #           is still L2-normalised -- inner-product search equals cosine
+  #           similarity only on unit vectors, so that step is not optional.
+  # maxpair - compare clips by their single most-similar frame pair. Slower and
+  #           O(frames^2) per pair, so it is applied only to borderline pairs.
+  mode: none
+
+search:
+  # flat | ivf | hnsw. `flat` is exact; the others trade recall for speed past
+  # roughly a million clips.
+  index_type: flat
+  top_k: 10
+  # ivf only
+  nlist: 100
+  nprobe: 10
+  # hnsw only
+  hnsw_m: 32
+
+clustering:
+  # Cosine similarity at or above this joins two clips into the same cluster.
+  similarity_threshold: 0.91
+  # Clusters at least this large are listed as remove/re-shoot candidates.
+  flag_cluster_size: 3
+
+scoring:
+  max_points: 15.0
+  # cluster_penalty = sum(size ** exponent for clusters size>1) / total_clips
+  penalty_exponent: 1.5
+
+borderline_review:
+  enabled: false
+  # Pairs whose similarity lands in [low, high) are ambiguous: too close to call
+  # duplicates, too close to call distinct.
+  gray_zone: [0.80, 0.91]
+  model: gpt-4o
+  # Hard cap on pairs sent to the API per run. A larger gray zone is sampled
+  # down proportionally across similarity bands.
+  max_pairs: 50
+  # Frames per clip attached to each comparison.
+  frames_per_clip: 1
+  max_output_tokens: 300
+  # Retries per pair on a transient API error; an exhausted pair is left
+  # unreviewed rather than failing the run.
+  max_retries: 2
+
+report:
+  # Copy one representative frame per cluster into the report directory.
+  thumbnails: true

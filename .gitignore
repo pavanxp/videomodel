@@ -1,0 +1,26 @@
+# Credentials -- never commit. `.env.example` is the committed template.
+.env
+.env.local
+*.pem
+*.key
+
+# Pipeline artefacts
+.vd_cache/
+results/
+*.npy
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+build/
+dist/
+
+# Tooling
+.pytest_cache/
+.coverage
+htmlcov/
+.mypy_cache/
+.ruff_cache/
